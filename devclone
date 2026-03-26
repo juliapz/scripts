@@ -102,33 +102,41 @@ devclone() {
     echo "⚠️ No package.json found, skipping npm install"
   fi
 
-  if [[ -z "$run_devbox" ]]; then
+  local run_service=""
+  
+  if [[ "$run_devbox" == "yes" ]]; then
+    run_service="yes"
+  elif [[ "$run_devbox" == "no" ]]; then
+    run_service="no"
+  else
     echo ""
-    echo -n "👉 Run devbox service develop? (y/n): "
+    echo -n "👉 Run service? (y/n): "
     read answer
     if [[ "$answer" =~ ^[Yy]$ ]]; then
-      run_devbox="yes"
+      run_service="yes"
     else
-      run_devbox="no"
+      run_service="no"
     fi
   fi
 
-  if [[ "$run_devbox" == "yes" ]]; then
-    echo "🐳 Starting devbox..."
-    devbox service develop || echo "⚠️ devbox command failed"
+  if [[ "$run_service" == "yes" ]]; then
+    if [[ "$mode" == "fe" ]]; then
+      echo "🎨 Running FE service..."
+      run_fe_command_auto
+    elif [[ "$mode" == "be" ]]; then
+      echo "🐳 Starting BE service (devbox)..."
+      devbox service develop || echo "⚠️ devbox command failed"
+    elif [[ "$mode" == "auto" ]]; then
+      if is_fe_repo; then
+        echo "🎨 FE repo detected, running FE service..."
+        run_fe_command_auto
+      else
+        echo "🧱 BE repo detected, starting devbox..."
+        devbox service develop || echo "⚠️ devbox command failed"
+      fi
+    fi
   else
-    echo "⏭️ Skipping devbox"
-  fi
-
-  if [[ "$mode" == "fe" ]]; then
-    run_fe_command
-  elif [[ "$mode" == "auto" ]]; then
-    if is_fe_repo; then
-      echo "🎨 FE repo detected"
-      run_fe_command
-    else
-      echo "🧱 Not detected as FE repo, skipping FE startup"
-    fi
+    echo "⏭️ Skipping service startup"
   fi
 
   echo "✨ Done"
@@ -191,6 +199,37 @@ run_fe_command() {
     else
       echo "⏭️ Skipping FE startup"
     fi
+  else
+    echo "⚠️ Could not detect FE startup command"
+  fi
+}
+
+run_fe_command_auto() {
+  [[ -f "package.json" ]] || {
+    echo "⚠️ No package.json, cannot detect FE start command"
+    return 0
+  }
+
+  local cmd
+  cmd=$(node -e '
+    const fs = require("fs");
+    const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+    const scripts = pkg.scripts || {};
+
+    if (scripts.serve) {
+      console.log("npm run serve");
+    } else if (scripts.fuse) {
+      console.log("npm run fuse");
+    } else if (scripts.dev) {
+      console.log("npm run dev");
+    } else if (scripts.start) {
+      console.log("npm start");
+    }
+  ')
+
+  if [[ -n "$cmd" ]]; then
+    echo "🎬 Running: $cmd"
+    eval "$cmd"
   else
     echo "⚠️ Could not detect FE startup command"
   fi

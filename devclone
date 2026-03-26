@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+
+devclone() {
+  local repo=""
+  local repo_url=""
+  local repo_name=""
+  local BASE_GH="git@github.com:pipedrive"
+  local run_devbox=""
+  local mode="auto"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --devbox)
+        run_devbox="yes"
+        shift
+        ;;
+      --no-devbox)
+        run_devbox="no"
+        shift
+        ;;
+      --fe)
+        mode="fe"
+        shift
+        ;;
+      --be)
+        mode="be"
+        shift
+        ;;
+      -*)
+        echo "❌ Unknown option: $1"
+        echo "Usage: devclone <repo-name-or-url> [--devbox|--no-devbox] [--fe|--be]"
+        return 1
+        ;;
+      *)
+        if [[ -z "$repo" ]]; then
+          repo="$1"
+        else
+          echo "❌ Unexpected argument: $1"
+          return 1
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$repo" ]]; then
+    echo "❌ Usage: devclone <repo-name-or-url> [--devbox|--no-devbox] [--fe|--be]"
+    return 1
+  fi
+
+  if [[ "$repo" != http* && "$repo" != git@* ]]; then
+    repo_url="$BASE_GH/$repo.git"
+  else
+    repo_url="$repo"
+  fi
+
+  repo_name=$(basename "$repo_url")
+  repo_name=${repo_name%.git}
+
+  echo "📦 Cloning $repo_name..."
+  git clone "$repo_url" || return 1
+
+  cd "$repo_name" || return 1
+
+  echo "🚀 Opening in VS Code..."
+  code .
+
+  if [[ -f ".nvmrc" ]]; then
+    echo "🟢 Running nvm use..."
+    
+    # Load nvm if not already available
+    if ! command -v nvm &> /dev/null; then
+      if [[ -s "$HOME/.nvm/nvm.sh" ]]; then
+        source "$HOME/.nvm/nvm.sh"
+      elif [[ -s "/opt/homebrew/opt/nvm/nvm.sh" ]]; then
+        source "/opt/homebrew/opt/nvm/nvm.sh"
+      elif [[ -s "/usr/local/opt/nvm/nvm.sh" ]]; then
+        source "/usr/local/opt/nvm/nvm.sh"
+      fi
+    fi
+    
+    nvm use || echo "⚠️ nvm use failed"
+  else
+    echo "⚠️ No .nvmrc found"
+  fi
+
+  if [[ -f "package-lock.json" ]]; then
+    echo "📥 Running npm ci..."
+    npm ci || return 1
+  elif [[ -f "package.json" ]]; then
+    echo "📥 Running npm install..."
+    npm install || return 1
+  else
+    echo "⚠️ No package.json found, skipping npm install"
+  fi
+
+  if [[ -z "$run_devbox" ]]; then
+    echo ""
+    echo -n "👉 Run devbox service develop? (y/n): "
+    read answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+      run_devbox="yes"
+    else
+      run_devbox="no"
+    fi
+  fi
+
+  if [[ "$run_devbox" == "yes" ]]; then
+    echo "🐳 Starting devbox..."
+    devbox service develop || echo "⚠️ devbox command failed"
+  else
+    echo "⏭️ Skipping devbox"
+  fi
+
+  if [[ "$mode" == "fe" ]]; then
+    run_fe_command
+  elif [[ "$mode" == "auto" ]]; then
+    if is_fe_repo; then
+      echo "🎨 FE repo detected"
+      run_fe_command
+    else
+      echo "🧱 Not detected as FE repo, skipping FE startup"
+    fi
+  fi
+
+  echo "✨ Done"
+}
+
+is_fe_repo() {
+  [[ -f "package.json" ]] || return 1
+
+  node -e '
+    const fs = require("fs");
+    const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    const scripts = pkg.scripts || {};
+
+    const looksLikeFE =
+      deps.react ||
+      deps.next ||
+      deps.vue ||
+      deps.angular ||
+      deps.vite ||
+      scripts.serve ||
+      scripts.dev ||
+      scripts.start ||
+      scripts.fuse;
+
+    process.exit(looksLikeFE ? 0 : 1);
+  '
+}
+
+run_fe_command() {
+  [[ -f "package.json" ]] || {
+    echo "⚠️ No package.json, cannot detect FE start command"
+    return 0
+  }
+
+  local cmd
+  cmd=$(node -e '
+    const fs = require("fs");
+    const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+    const scripts = pkg.scripts || {};
+
+    if (scripts.serve) {
+      console.log("npm run serve");
+    } else if (scripts.fuse) {
+      console.log("npm run fuse");
+    } else if (scripts.dev) {
+      console.log("npm run dev");
+    } else if (scripts.start) {
+      console.log("npm start");
+    }
+  ')
+
+  if [[ -n "$cmd" ]]; then
+    echo ""
+    echo -n "👉 Run FE command '$cmd'? (y/n): "
+    read answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+      echo "🎬 Running: $cmd"
+      eval "$cmd"
+    else
+      echo "⏭️ Skipping FE startup"
+    fi
+  else
+    echo "⚠️ Could not detect FE startup command"
+  fi
+}
+
+devclone "$@"
